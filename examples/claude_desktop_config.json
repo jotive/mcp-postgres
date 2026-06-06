@@ -1,0 +1,12 @@
+{
+  "//": "Drop this into Claude Desktop's claude_desktop_config.json (mcpServers block). It spawns the stdio server with a read-only DSN.",
+  "mcpServers": {
+    "postgres": {
+      "command": "mcp-postgres",
+      "env": {
+        "MCPPG_TARGETS": "[{\"name\":\"dev\",\"dsn\":\"postgresql://mcp_ro:PASSWORD@localhost:5432/mydb\",\"max_rows\":1000}]",
+        "MCPPG_DEFAULT_TARGET": "dev"
+      }
+    }
+  }
+}
