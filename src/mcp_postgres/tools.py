@@ -16,8 +16,6 @@ ORDER BY table_name, ordinal_position
 
 
 class Service:
-    # Holds the wiring (pools, per-target config, audit) so the MCP tool functions
-    # in server.py stay thin. All three tools route through here.
     def __init__(self, registry: Registry, configs: dict[str, TargetConfig], audit: AuditLog, default: str) -> None:
         self._registry = registry
         self._configs = configs
@@ -80,5 +78,4 @@ class Service:
 
 
 def _quote_literal(value: str) -> str:
-    # schema name is server-built, not user SQL, but quote it anyway.
     return "'" + value.replace("'", "''") + "'"

@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
 class AuditLog:
-    # Append-only JSONL. Every tool call lands here whether it succeeds or fails,
-    # with the SQL that actually executed (post-guard), rows touched, and duration.
-    # See adr/ADR-002 for the field contract and why JSONL.
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
@@ -24,7 +21,7 @@ class AuditLog:
         error: str | None = None,
     ) -> None:
         entry = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
             "target": target,
             "tool": tool,
             "sql": sql,
