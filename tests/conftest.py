@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlsplit, urlunsplit
 
 import asyncpg
 import pytest
@@ -59,3 +60,36 @@ async def count_items(dsn: str) -> int:
         return await connection.fetchval("SELECT count(*) FROM mcp_test_items")
     finally:
         await connection.close()
+
+
+READONLY_ROLE = "mcp_test_readonly"
+READONLY_PASSWORD = "mcp_test_readonly_password"
+
+
+@pytest.fixture
+async def readonly_dsn(writable_dsn, items_table):
+    admin = await asyncpg.connect(writable_dsn)
+    try:
+        database = await admin.fetchval("SELECT current_database()")
+        try:
+            await admin.execute(f"DROP ROLE IF EXISTS {READONLY_ROLE}")
+            await admin.execute(
+                f"CREATE ROLE {READONLY_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE "
+                f"PASSWORD '{READONLY_PASSWORD}'"
+            )
+        except asyncpg.InsufficientPrivilegeError:
+            pytest.skip("MCPPG_TEST_DSN role cannot create roles")
+        await admin.execute(f'GRANT CONNECT ON DATABASE "{database}" TO {READONLY_ROLE}')
+        await admin.execute(f"GRANT USAGE ON SCHEMA public TO {READONLY_ROLE}")
+        await admin.execute(f"GRANT SELECT ON {items_table} TO {READONLY_ROLE}")
+        parts = urlsplit(writable_dsn)
+        host = parts.hostname or "localhost"
+        port = f":{parts.port}" if parts.port else ""
+        dsn = urlunsplit(
+            (parts.scheme, f"{READONLY_ROLE}:{READONLY_PASSWORD}@{host}{port}", parts.path, parts.query, "")
+        )
+        yield dsn
+    finally:
+        await admin.execute(f"DROP OWNED BY {READONLY_ROLE}")
+        await admin.execute(f"DROP ROLE IF EXISTS {READONLY_ROLE}")
+        await admin.close()

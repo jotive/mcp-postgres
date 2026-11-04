@@ -1,25 +1,47 @@
 from __future__ import annotations
 
+import re
+
 import sqlglot
 from sqlglot import expressions as exp
 
-_FORBIDDEN = (
-    exp.Insert,
-    exp.Update,
-    exp.Delete,
-    exp.Merge,
-    exp.Drop,
-    exp.Create,
-    exp.Alter,
-    exp.TruncateTable,
-    exp.Command,
-    exp.Into,
-    *(
-        getattr(exp, name)
-        for name in ("Set", "Copy", "Transaction", "Commit", "Rollback", "Use", "Pragma")
-        if hasattr(exp, name)
-    ),
+_FORBIDDEN_NODE_NAMES = (
+    "Insert",
+    "Update",
+    "Delete",
+    "Merge",
+    "Drop",
+    "Create",
+    "Alter",
+    "TruncateTable",
+    "Command",
+    "Into",
+    "Set",
+    "Copy",
+    "Transaction",
+    "Commit",
+    "Rollback",
+    "Use",
+    "Pragma",
 )
+
+_REQUIRED_NODE_NAMES = (*_FORBIDDEN_NODE_NAMES, "Select", "Union", "Lock", "Func", "Anonymous")
+
+
+def _require_expression_classes(names: tuple[str, ...]) -> None:
+    missing = [name for name in names if not hasattr(exp, name)]
+    if missing:
+        raise RuntimeError(
+            f"installed sqlglot {sqlglot.__version__} lacks expected expression classes: "
+            f"{', '.join(missing)}"
+        )
+
+
+_require_expression_classes(_REQUIRED_NODE_NAMES)
+
+_FORBIDDEN = tuple(getattr(exp, name) for name in _FORBIDDEN_NODE_NAMES)
+
+_UNICODE_ESCAPED_IDENTIFIER = re.compile(r'u&\s*"', re.IGNORECASE)
 
 _FORBIDDEN_FUNCTIONS = frozenset(
     {
@@ -39,6 +61,8 @@ _FORBIDDEN_FUNCTIONS = frozenset(
         "query_to_xmlschema",
         "cursor_to_xml",
         "cursor_to_xmlschema",
+        "loread",
+        "lowrite",
     }
 )
 
@@ -60,6 +84,9 @@ class UnsafeQuery(ValueError):
 
 
 def guard_select(sql: str, *, max_rows: int, dialect: str = "postgres") -> str:
+    if _UNICODE_ESCAPED_IDENTIFIER.search(sql):
+        raise UnsafeQuery("unicode-escaped identifiers are not allowed")
+
     try:
         statements = [s for s in sqlglot.parse(sql, read=dialect) if s is not None]
     except sqlglot.errors.ParseError as e:

@@ -28,7 +28,15 @@ Applied to `query_safe` and `explain_plan`. A query is rejected unless it parses
 - `INSERT`/`UPDATE`/`DELETE`/`MERGE`/`DROP`/`CREATE`/`ALTER`/`TRUNCATE` anywhere in the tree, including data-modifying CTEs and subqueries
 - bare commands: `COPY`, `SET`/`SET ROLE`/`RESET`, `BEGIN`/`COMMIT`/`ROLLBACK`, `DO`, `CALL`, `VACUUM`, `GRANT`, `LOCK`
 - `SELECT ... INTO` and locking clauses (`FOR UPDATE`/`FOR SHARE`)
-- calls to functions with side effects or server-side file/network access: `set_config`, `nextval`, `setval`, `pg_notify`, `pg_terminate_backend`, `pg_cancel_backend`, `pg_reload_conf`, `pg_advisory*`, `pg_read_*`, `pg_ls_*`, `lo_*`, `dblink*`, `query_to_xml*`, `cursor_to_xml*`, and a few others (see `_FORBIDDEN_FUNCTIONS`)
+- calls to functions with side effects or server-side file/network access: `set_config`, `nextval`, `setval`, `pg_notify`, `pg_terminate_backend`, `pg_cancel_backend`, `pg_reload_conf`, `pg_advisory*`, `pg_read_*`, `pg_ls_*`, `loread`, `lowrite`, `query_to_xml*`, `cursor_to_xml*`, and a few others (see `_FORBIDDEN_FUNCTIONS`)
+- every function whose name starts with `lo_` or `dblink`, matched by prefix, also when schema-qualified or quoted
+- unicode-escaped identifiers (`U&"..."`), which could otherwise spell a denylisted function name in a form the guard cannot see
+
+Compatibility notes:
+
+- `set_config(..., true)` is rejected too, not only the session-wide form. It is a common row-level-security pattern (`set_config('app.tenant_id', ..., true)`), so queries that set RLS context inside the query itself no longer run through these tools. Set such context on the connection or role instead.
+- Dollar-quoted strings and comments are not rejected; they parse as inert literals or are dropped, and the guard still sees exactly one statement.
+- The guard relies on specific sqlglot expression classes. `pyproject.toml` pins `sqlglot>=26.0.0,<31`, and the module raises `RuntimeError` at import if an expected class is missing, instead of silently skipping the check.
 
 A `LIMIT` is injected, or clamped to the target's `max_rows`.
 
@@ -47,7 +55,8 @@ Every call runs in an explicit `READ ONLY` transaction with `SET LOCAL statement
 ### What is not protected
 
 - **Reads are not restricted.** Any table the DSN's role can `SELECT` is readable, including through `pg_catalog`. Grant only what an agent should see; use views or row-level security for sensitive columns.
-- **The role is the real boundary.** A superuser or over-privileged DSN can still read files and settings through functions the guard does not list. Use a dedicated role with `SELECT` only and no `pg_read_server_files`, `pg_execute_server_program` or `pg_monitor`.
+- **`dblink` and foreign data wrappers escape the local transaction.** Their connections to other servers are not covered by this server's read-only transaction or `statement_timeout`, so the guard's name denylist is the only barrier there. Do not install `dblink`, `postgres_fdw` or similar extensions in databases exposed to agents, or make sure the role cannot use them; the database role is the real security boundary.
+- **The role is the real boundary.** A superuser or over-privileged DSN can still read files and settings through functions the guard does not list. Use a dedicated role with `SELECT` only and no `pg_read_server_files`, `pg_execute_server_program` or `pg_monitor`. `PUBLIC` can create temporary tables by default on a plain connection; `REVOKE TEMPORARY ON DATABASE ... FROM PUBLIC` if that matters. The test suite runs the attack cases as a non-superuser `SELECT`-only role created in the fixture.
 - **The function denylist is not exhaustive.** Extensions may add functions with side effects; unknown ones are allowed through the guard and rely on layer 2.
 - **Resource use below the timeout** (CPU, temp files, connections) is not limited beyond `statement_timeout_ms` and the pool size of 4. Set role-level limits (`work_mem`, `temp_file_limit`, `CONNECTION LIMIT`) for hard guarantees.
 - **Row cap bounds count, not size.** A few very wide rows can still be large.

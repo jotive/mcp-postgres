@@ -1,5 +1,8 @@
-﻿import pytest
+import pytest
+import sqlglot
+from sqlglot import expressions as exp
 
+from mcp_postgres import safety
 from mcp_postgres.safety import UnsafeQuery, guard_select
 
 
@@ -150,3 +153,70 @@ def test_limit_clamped_on_union():
 def test_non_literal_limit_clamped():
     out = guard_select("SELECT id FROM users LIMIT (SELECT 999999)", max_rows=100)
     assert "999999" not in out
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        'SELECT U&"set\\005fconfig"(\'statement_timeout\', \'0\', false)',
+        'SELECT u&"set_config"(\'statement_timeout\', \'0\', false)',
+        'SELECT U&"\\0073et_config"(\'statement_timeout\', \'0\', false)',
+        'SELECT U& "set_config"(\'statement_timeout\', \'0\', false)',
+        'SELECT * FROM U&"us\\0065rs"',
+        "SELECT set_config/**/('statement_timeout', '0', false)",
+        "SELECT set_config /* comment */ ('statement_timeout', '0', false)",
+        "SELECT set_config\n('statement_timeout', '0', false)",
+        "SELECT set_config -- comment\n('statement_timeout', '0', false)",
+        "SELECT pg_catalog . set_config('statement_timeout', '0', false)",
+        "SELECT \"pg_catalog\".\"set_config\"('statement_timeout', '0', false)",
+        "SELECT $$x$$, set_config($$statement_timeout$$, $$0$$, false)",
+        "SELECT $tag$x$tag$, set_config($tag$statement_timeout$tag$, $tag$0$tag$, false)",
+        "DO $$ BEGIN DELETE FROM users; END $$",
+        "DO $body$ BEGIN PERFORM set_config('role', 'postgres', false); END $body$",
+        "SELECT 1; $$ ; $$",
+        "SELECT lowrite(0, 'x')",
+        "SELECT LOWRITE(0, 'x')",
+        "SELECT loread(0, 10)",
+        "SELECT lo_creat(-1)",
+        "SELECT lo_unlink(1)",
+        "SELECT pg_catalog.lowrite(0, 'x')",
+        "SELECT * INTO TEMP scratch FROM users",
+        "SELECT * INTO TEMPORARY scratch FROM users",
+        "SELECT * INTO TEMPORARY TABLE scratch FROM users",
+        "SELECT * INTO UNLOGGED scratch FROM users",
+        "SELECT * INTO scratch FROM users",
+        "SELECT E'\\x27'; DELETE FROM users",
+        "SELECT 'a'; --\nDELETE FROM users",
+        "SELECT 1 /* ; */ ; DELETE FROM users",
+        "SELECT * FROM users WHERE name = 'a\\'; DELETE FROM users; --'",
+    ],
+)
+def test_evasion_attempts_rejected(sql):
+    with pytest.raises(UnsafeQuery):
+        guard_select(sql, max_rows=100)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT $$ ; DELETE FROM users; $$",
+        "SELECT $tag$ ; DROP TABLE users $tag$ AS payload",
+        "SELECT 1 /* ; DELETE FROM users */",
+        "SELECT '-- ; DELETE FROM users'",
+        "SELECT U&'\\0041'",
+    ],
+)
+def test_inert_string_and_comment_payloads_stay_single_select(sql):
+    out = guard_select(sql, max_rows=100)
+    assert len(sqlglot.parse(out, read="postgres")) == 1
+    assert not list(sqlglot.parse_one(out, read="postgres").find_all(exp.Delete, exp.Drop))
+
+
+def test_every_expected_sqlglot_class_is_available():
+    missing = [name for name in safety._REQUIRED_NODE_NAMES if not hasattr(exp, name)]
+    assert missing == []
+
+
+def test_missing_sqlglot_class_fails_loudly():
+    with pytest.raises(RuntimeError, match="NoSuchExpressionClass"):
+        safety._require_expression_classes(("Insert", "NoSuchExpressionClass"))
