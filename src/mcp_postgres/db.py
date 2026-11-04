@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncpg
 
@@ -6,9 +6,6 @@ from mcp_postgres.config import TargetConfig
 
 
 class TargetPool:
-    # One lazily-created asyncpg pool per target. Every connection opens in a
-    # read-only transaction with a hard statement_timeout, so even a query that
-    # slips past the parser cannot write or run unbounded. Defense layer 2.
     def __init__(self, cfg: TargetConfig) -> None:
         self.cfg = cfg
         self._pool: asyncpg.Pool | None = None
@@ -29,9 +26,11 @@ class TargetPool:
 
     async def fetch(self, sql: str, max_rows: int) -> list[dict]:
         pool = await self.pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(sql)
-        return [dict(r) for r in rows[:max_rows]]
+        async with pool.acquire() as conn, conn.transaction(readonly=True):
+            await conn.execute(f"SET LOCAL statement_timeout = {int(self.cfg.statement_timeout_ms)}")
+            cursor = await conn.cursor(sql)
+            rows = await cursor.fetch(max_rows)
+        return [dict(r) for r in rows]
 
     async def close(self) -> None:
         if self._pool is not None:

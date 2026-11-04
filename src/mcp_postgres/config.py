@@ -8,16 +8,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class TargetConfig(BaseModel):
     name: str
-    dsn: str  # DSN for a READ-ONLY role. The server assumes least privilege here.
-    max_rows: int = 1000
-    statement_timeout_ms: int = 5000
+    dsn: str
+    max_rows: int = Field(default=1000, gt=0)
+    statement_timeout_ms: int = Field(default=5000, gt=0)
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MCPPG_", env_file=".env", extra="ignore")
 
-    # JSON array of targets, e.g.
-    # MCPPG_TARGETS='[{"name":"dev","dsn":"postgresql://ro@host/db","max_rows":500}]'
     targets: str = Field(default="[]")
     default_target: str | None = None
     audit_path: str = "audit.log.jsonl"

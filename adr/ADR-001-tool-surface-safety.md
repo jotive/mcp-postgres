@@ -22,20 +22,29 @@ No write tool exists. Adding one is a deliberate future ADR, not a config flag.
 
 **Two independent layers of defense — both must hold:**
 
-1. **Parser guard (`safety.guard_select`).** Parse with sqlglot. Reject if not exactly one
-   statement, if any `INSERT/UPDATE/DELETE/MERGE/DROP/CREATE/ALTER/TRUNCATE/COMMAND` node
-   appears anywhere in the tree (catches CTE writes and subquery DML), or if the root is not
-   `SELECT`/`UNION`. Inject/clamp a `LIMIT` to the target's `max_rows`.
-2. **Database posture (`db.TargetPool`).** Every connection runs with
-   `default_transaction_read_only=on` and a hard `statement_timeout`, and the DSN points at a
-   **least-privilege role with only `SELECT` grants**. If the parser is ever fooled, the
-   database still refuses the write and kills long queries.
+1. **AST guard (`safety.guard_select`).** Parse with sqlglot. Reject if not exactly one
+   statement, if any write/DDL/command node appears anywhere in the tree (`INSERT`, `UPDATE`,
+   `DELETE`, `MERGE`, `DROP`, `CREATE`, `ALTER`, `TRUNCATE`, bare commands, `SELECT INTO`,
+   `SET`, `COPY`, transaction control — this catches CTE writes and subquery DML), if the
+   root is not `SELECT`/`UNION`, if a locking clause is present, if a denylisted function
+   is called (side effects, server-side file access, `lo_*`, `dblink*`, `set_config`), or if
+   a unicode-escaped identifier (`U&"..."`) is used. Inject/clamp a `LIMIT` to the target's
+   `max_rows`. The sqlglot version range is pinned and the module fails at import if an
+   expected expression class is missing.
+2. **Read-only transaction (`db.TargetPool.fetch`).** Every call runs in an explicit
+   `READ ONLY` transaction with `SET LOCAL statement_timeout`, reading through a cursor
+   limited to `max_rows`. Connections also start with `default_transaction_read_only=on`
+   and the same timeout.
 
-The parser alone is not trusted. The role + read-only transaction is the real boundary; the
-parser gives fast, legible rejection and the row cap.
+Neither layer replaces the **database role**: the DSN must point at a least-privilege role
+with only `SELECT` grants. The AST guard gives fast, legible rejection and the row cap; the
+read-only transaction stops writes the guard misses; the role limits what a read can reach.
+The read-only transaction does not cover connections that leave the local server (`dblink`,
+foreign data wrappers), so there the denylist is the only barrier and the role is the real
+boundary.
 
 ## Consequences
 
-- Some legitimate read patterns (e.g. `SELECT ... FOR UPDATE`) are rejected. Acceptable.
+- Some legitimate read patterns (e.g. `SELECT ... FOR UPDATE`, `set_config(..., true)` for RLS context) are rejected. Acceptable.
 - The operator MUST provision a read-only role. A superuser DSN defeats layer 2. Documented in
   the README and `.env.example`.
